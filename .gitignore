@@ -32,3 +32,8 @@ go-callvis
 
 # IDE
 /.idea/
+
+.DS_Store
+.vscode
+.build
+cache

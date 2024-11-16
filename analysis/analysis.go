@@ -1,20 +1,23 @@
-package main
+package analysis
 
 import (
 	"errors"
 	"fmt"
 	"go/build"
 	"go/types"
-	"golang.org/x/tools/go/callgraph"
-	"golang.org/x/tools/go/callgraph/cha"
-	"golang.org/x/tools/go/callgraph/rta"
-	"golang.org/x/tools/go/callgraph/static"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ofabry/go-callvis/pkg/logger"
+	"github.com/ofabry/go-callvis/pkg/output"
+	"golang.org/x/tools/go/callgraph"
+	"golang.org/x/tools/go/callgraph/cha"
+	"golang.org/x/tools/go/callgraph/rta"
+	"golang.org/x/tools/go/callgraph/static"
 
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
@@ -29,7 +32,7 @@ const (
 	CallGraphTypeRta    CallGraphType = "rta"
 )
 
-//==[ type def/func: analysis   ]===============================================
+// ==[ type def/func: analysis   ]===============================================
 type renderOpts struct {
 	cacheDir string
 	focus    string
@@ -58,25 +61,44 @@ func mainPackages(pkgs []*ssa.Package) ([]*ssa.Package, error) {
 	return mains, nil
 }
 
-//==[ type def/func: analysis   ]===============================================
-type analysis struct {
-	opts      *renderOpts
-	prog      *ssa.Program
-	pkgs      []*ssa.Package
-	mainPkg   *ssa.Package
-	callgraph *callgraph.Graph
+// ==[ type def/func: Analysis   ]===============================================
+type Analysis struct {
+	opts         *renderOpts
+	prog         *ssa.Program
+	pkgs         []*ssa.Package
+	mainPkg      *ssa.Package
+	callgraph    *callgraph.Graph
+	outputFormat string
+	Minlen       uint
+	PrintOptions map[string]string
 }
 
-var Analysis *analysis
+func NewAnalysis(outputFormat string) *Analysis {
+	return &Analysis{
+		outputFormat: outputFormat,
+	}
+}
 
-func (a *analysis) DoAnalysis(
+func (a *Analysis) DoAnalysis(
 	algo CallGraphType,
 	dir string,
 	tests bool,
 	args []string,
 ) error {
+	allPackages := packages.NeedName |
+		packages.NeedFiles |
+		packages.NeedCompiledGoFiles |
+		packages.NeedImports |
+		packages.NeedDeps |
+		packages.NeedExportFile |
+		packages.NeedTypes |
+		packages.NeedSyntax |
+		packages.NeedTypesInfo |
+		packages.NeedTypesSizes |
+		packages.NeedModule | packages.NeedEmbedFiles | packages.NeedEmbedPatterns
+
 	cfg := &packages.Config{
-		Mode:       packages.LoadAllSyntax,
+		Mode:       packages.LoadMode(allPackages),
 		Tests:      tests,
 		Dir:        dir,
 		BuildFlags: getBuildFlags(),
@@ -127,20 +149,30 @@ func (a *analysis) DoAnalysis(
 	return nil
 }
 
-func (a *analysis) OptsSetup() {
+func (a *Analysis) OptsSetup(cacheDir string,
+	focus string,
+	group string,
+	ignore string,
+	include string,
+	limit string,
+	nointer bool,
+	refresh bool,
+	nostd bool,
+	algo CallGraphType,
+) {
 	a.opts = &renderOpts{
-		cacheDir: *cacheDir,
-		focus:    *focusFlag,
-		group:    []string{*groupFlag},
-		ignore:   []string{*ignoreFlag},
-		include:  []string{*includeFlag},
-		limit:    []string{*limitFlag},
-		nointer:  *nointerFlag,
-		nostd:    *nostdFlag,
+		cacheDir: cacheDir,
+		focus:    focus,
+		group:    []string{group},
+		ignore:   []string{ignore},
+		include:  []string{include},
+		limit:    []string{limit},
+		nointer:  nointer,
+		nostd:    nostd,
 	}
 }
 
-func (a *analysis) ProcessListArgs() (e error) {
+func (a *Analysis) ProcessListArgs() (e error) {
 	var groupBy []string
 	var ignorePaths []string
 	var includePaths []string
@@ -156,38 +188,43 @@ func (a *analysis) ProcessListArgs() (e error) {
 			return
 		}
 		groupBy = append(groupBy, g)
+		a.opts.group = groupBy
 	}
 
-	for _, p := range strings.Split(a.opts.ignore[0], ",") {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			ignorePaths = append(ignorePaths, p)
+	if len(a.opts.ignore) > 0 {
+		for _, p := range strings.Split(a.opts.ignore[0], ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				ignorePaths = append(ignorePaths, p)
+			}
 		}
+		a.opts.ignore = ignorePaths
 	}
 
-	for _, p := range strings.Split(a.opts.include[0], ",") {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			includePaths = append(includePaths, p)
+	if len(a.opts.include) > 0 {
+		for _, p := range strings.Split(a.opts.include[0], ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				includePaths = append(includePaths, p)
+			}
 		}
+		a.opts.include = includePaths
 	}
 
-	for _, p := range strings.Split(a.opts.limit[0], ",") {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			limitPaths = append(limitPaths, p)
+	if len(a.opts.limit) > 0 {
+		for _, p := range strings.Split(a.opts.limit[0], ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				limitPaths = append(limitPaths, p)
+			}
 		}
+		a.opts.limit = limitPaths
 	}
-
-	a.opts.group = groupBy
-	a.opts.ignore = ignorePaths
-	a.opts.include = includePaths
-	a.opts.limit = limitPaths
 
 	return
 }
 
-func (a *analysis) OverrideByHTTP(r *http.Request) {
+func (a *Analysis) OverrideByHTTP(r *http.Request) {
 	if f := r.FormValue("f"); f == "all" {
 		a.opts.focus = ""
 	} else if f != "" {
@@ -214,12 +251,11 @@ func (a *analysis) OverrideByHTTP(r *http.Request) {
 	if inc := r.FormValue("include"); inc != "" {
 		a.opts.include[0] = inc
 	}
-	return
 }
 
 // basically do printOutput() with previously checking
 // focus option and respective package
-func (a *analysis) Render() ([]byte, error) {
+func (a *Analysis) Render(minlen uint, options map[string]string) ([]byte, error) {
 	var (
 		err      error
 		ssaPkg   *ssa.Package
@@ -252,10 +288,10 @@ func (a *analysis) Render() ([]byte, error) {
 			}
 		}
 		focusPkg = ssaPkg.Pkg
-		logf("focusing: %v", focusPkg.Path())
+		logger.LogDebug("focusing: %v", focusPkg.Path())
 	}
 
-	dot, err := printOutput(
+	dot, err := output.PrintOutput(
 		a.prog,
 		a.mainPkg,
 		a.callgraph,
@@ -266,6 +302,8 @@ func (a *analysis) Render() ([]byte, error) {
 		a.opts.group,
 		a.opts.nostd,
 		a.opts.nointer,
+		minlen,
+		options,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("processing failed: %v", err)
@@ -274,7 +312,7 @@ func (a *analysis) Render() ([]byte, error) {
 	return dot, nil
 }
 
-func (a *analysis) FindCachedImg() string {
+func (a *Analysis) FindCachedImg() string {
 	if a.opts.cacheDir == "" || a.opts.refresh {
 		return ""
 	}
@@ -283,7 +321,7 @@ func (a *analysis) FindCachedImg() string {
 	if focus == "" {
 		focus = "all"
 	}
-	focusFilePath := focus + "." + *outputFormat
+	focusFilePath := focus + "." + a.outputFormat
 	absFilePath := filepath.Join(a.opts.cacheDir, focusFilePath)
 
 	if exists, err := pathExists(absFilePath); err != nil || !exists {
@@ -295,7 +333,7 @@ func (a *analysis) FindCachedImg() string {
 	return absFilePath
 }
 
-func (a *analysis) CacheImg(img string) error {
+func (a *Analysis) CacheImg(img string) error {
 	if a.opts.cacheDir == "" || img == "" {
 		return nil
 	}
@@ -313,7 +351,7 @@ func (a *analysis) CacheImg(img string) error {
 		return err
 	}
 
-	absFilePath := absCacheDirPrefix + "." + *outputFormat
+	absFilePath := absCacheDirPrefix + "." + a.outputFormat
 	_, err = copyFile(img, absFilePath)
 	if err != nil {
 		return err

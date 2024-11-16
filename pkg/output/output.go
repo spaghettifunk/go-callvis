@@ -1,4 +1,4 @@
-package main
+package output
 
 import (
 	"bytes"
@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ofabry/go-callvis/pkg/dot"
+	"github.com/ofabry/go-callvis/pkg/logger"
 	"golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/ssa"
 )
@@ -21,7 +23,7 @@ func inStd(node *callgraph.Node) bool {
 	return pkg.Goroot
 }
 
-func printOutput(
+func PrintOutput(
 	prog *ssa.Program,
 	mainPkg *ssa.Package,
 	cg *callgraph.Graph,
@@ -32,6 +34,8 @@ func printOutput(
 	groupBy []string,
 	nostd,
 	nointer bool,
+	minlen uint,
+	options map[string]string,
 ) ([]byte, error) {
 	var groupType, groupPkg bool
 	for _, g := range groupBy {
@@ -43,8 +47,8 @@ func printOutput(
 		}
 	}
 
-	cluster := NewDotCluster("focus")
-	cluster.Attrs = dotAttrs{
+	cluster := dot.NewDotCluster("focus")
+	cluster.Attrs = dot.DotAttrs{
 		"bgcolor":   "white",
 		"label":     "",
 		"labelloc":  "t",
@@ -57,19 +61,19 @@ func printOutput(
 	}
 
 	var (
-		nodes []*dotNode
-		edges []*dotEdge
+		nodes []*dot.DotNode
+		edges []*dot.DotEdge
 	)
 
-	nodeMap := make(map[string]*dotNode)
-	edgeMap := make(map[string]*dotEdge)
+	nodeMap := make(map[string]*dot.DotNode)
+	edgeMap := make(map[string]*dot.DotEdge)
 
 	cg.DeleteSyntheticNodes()
 
-	logf("%d limit prefixes: %v", len(limitPaths), limitPaths)
-	logf("%d ignore prefixes: %v", len(ignorePaths), ignorePaths)
-	logf("%d include prefixes: %v", len(includePaths), includePaths)
-	logf("no std packages: %v", nostd)
+	logger.LogDebug("%d limit prefixes: %v", len(limitPaths), limitPaths)
+	logger.LogDebug("%d ignore prefixes: %v", len(ignorePaths), ignorePaths)
+	logger.LogDebug("%d include prefixes: %v", len(includePaths), includePaths)
+	logger.LogDebug("no std packages: %v", nostd)
 
 	var isFocused = func(edge *callgraph.Edge) bool {
 		caller := edge.Caller
@@ -94,7 +98,7 @@ func printOutput(
 			}
 		}
 		if fromFocused && toFocused {
-			logf("edge semi-focus: %s", edge)
+			logger.LogDebug("edge semi-focus: %s", edge)
 			return true
 		}
 		return false
@@ -181,7 +185,7 @@ func printOutput(
 		// include path prefixes
 		if len(includePaths) > 0 &&
 			(inIncludes(caller) || inIncludes(callee)) {
-			logf("include: %s -> %s", caller, callee)
+			logger.LogDebug("include: %s -> %s", caller, callee)
 			include = true
 		}
 
@@ -189,14 +193,14 @@ func printOutput(
 			// limit path prefixes
 			if len(limitPaths) > 0 &&
 				(!inLimits(caller) || !inLimits(callee)) {
-				logf("NOT in limit: %s -> %s", caller, callee)
+				logger.LogDebug("NOT in limit: %s -> %s", caller, callee)
 				return nil
 			}
 
 			// ignore path prefixes
 			if len(ignorePaths) > 0 &&
 				(inIgnores(caller) || inIgnores(callee)) {
-				logf("IS ignored: %s -> %s", caller, callee)
+				logger.LogDebug("IS ignored: %s -> %s", caller, callee)
 				return nil
 			}
 		}
@@ -204,9 +208,9 @@ func printOutput(
 		//var buf bytes.Buffer
 		//data, _ := json.MarshalIndent(caller.Func, "", " ")
 		//logf("call node: %s -> %s\n %v", caller, callee, string(data))
-		logf("call node: %s -> %s (%s -> %s) %v\n", caller.Func.Pkg, callee.Func.Pkg, caller, callee, filenameCaller)
+		logger.LogDebug("call node: %s -> %s (%s -> %s) %v\n", caller.Func.Pkg, callee.Func.Pkg, caller, callee, filenameCaller)
 
-		var sprintNode = func(node *callgraph.Node, isCaller bool) *dotNode {
+		var sprintNode = func(node *callgraph.Node, isCaller bool) *dot.DotNode {
 			// only once
 			key := node.Func.String()
 			nodeTooltip := ""
@@ -227,7 +231,7 @@ func printOutput(
 			// is focused
 			isFocused := focusPkg != nil &&
 				node.Func.Pkg.Pkg.Path() == focusPkg.Path()
-			attrs := make(dotAttrs)
+			attrs := make(dot.DotAttrs)
 
 			// node label
 			label := node.Func.RelString(node.Func.Pkg.Pkg)
@@ -280,10 +284,10 @@ func printOutput(
 				}
 				key := node.Func.Pkg.Pkg.Path()
 				if _, ok := c.Clusters[key]; !ok {
-					c.Clusters[key] = &dotCluster{
+					c.Clusters[key] = &dot.DotCluster{
 						ID:       key,
-						Clusters: make(map[string]*dotCluster),
-						Attrs: dotAttrs{
+						Clusters: make(map[string]*dot.DotCluster),
+						Attrs: dot.DotAttrs{
 							"penwidth":  "0.8",
 							"fontsize":  "16",
 							"label":     label,
@@ -307,10 +311,10 @@ func printOutput(
 				label := strings.Split(node.Func.RelString(node.Func.Pkg.Pkg), ".")[0]
 				key := sign.Recv().Type().String()
 				if _, ok := c.Clusters[key]; !ok {
-					c.Clusters[key] = &dotCluster{
+					c.Clusters[key] = &dot.DotCluster{
 						ID:       key,
-						Clusters: make(map[string]*dotCluster),
-						Attrs: dotAttrs{
+						Clusters: make(map[string]*dot.DotCluster),
+						Attrs: dot.DotAttrs{
 							"penwidth":  "0.5",
 							"fontsize":  "15",
 							"fontcolor": "#222222",
@@ -332,7 +336,7 @@ func printOutput(
 
 			attrs["tooltip"] = nodeTooltip
 
-			n := &dotNode{
+			n := &dot.DotNode{
 				ID:    node.Func.String(),
 				Attrs: attrs,
 			}
@@ -350,7 +354,7 @@ func printOutput(
 		calleeNode := sprintNode(edge.Callee, false)
 
 		// edges
-		attrs := make(dotAttrs)
+		attrs := make(dot.DotAttrs)
 
 		// dynamic call
 		if edge.Site != nil && edge.Site.Common().StaticCallee() == nil {
@@ -383,7 +387,7 @@ func printOutput(
 		key := fmt.Sprintf("%s = %s => %s", caller.Func, edge.Description(), callee.Func)
 		if _, ok := edgeMap[key]; !ok {
 			attrs["tooltip"] = fileEdge
-			e := &dotEdge{
+			e := &dot.DotEdge{
 				From:  callerNode,
 				To:    calleeNode,
 				Attrs: attrs,
@@ -418,25 +422,26 @@ func printOutput(
 		edges = append(edges, e)
 	}
 
-	logf("%d/%d edges", len(edges), count)
+	logger.LogDebug("%d/%d edges", len(edges), count)
 
 	title := ""
 	if mainPkg != nil && mainPkg.Pkg != nil {
 		title = mainPkg.Pkg.Path()
 	}
-	dot := &dotGraph{
+	dot := &dot.DotGraph{
 		Title:   title,
 		Minlen:  minlen,
 		Cluster: cluster,
 		Nodes:   nodes,
 		Edges:   edges,
-		Options: map[string]string{
-			"minlen":    fmt.Sprint(minlen),
-			"nodesep":   fmt.Sprint(nodesep),
-			"nodeshape": fmt.Sprint(nodeshape),
-			"nodestyle": fmt.Sprint(nodestyle),
-			"rankdir":   fmt.Sprint(rankdir),
-		},
+		Options: options,
+		// Options: map[string]string{
+		// 	"minlen":    fmt.Sprint(minlen),
+		// 	"nodesep":   fmt.Sprint(nodesep),
+		// 	"nodeshape": fmt.Sprint(nodeshape),
+		// 	"nodestyle": fmt.Sprint(nodestyle),
+		// 	"rankdir":   fmt.Sprint(rankdir),
+		// },
 	}
 
 	var buf bytes.Buffer
