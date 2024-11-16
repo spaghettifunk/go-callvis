@@ -435,13 +435,6 @@ func PrintOutput(
 		Nodes:   nodes,
 		Edges:   edges,
 		Options: options,
-		// Options: map[string]string{
-		// 	"minlen":    fmt.Sprint(minlen),
-		// 	"nodesep":   fmt.Sprint(nodesep),
-		// 	"nodeshape": fmt.Sprint(nodeshape),
-		// 	"nodestyle": fmt.Sprint(nodestyle),
-		// 	"rankdir":   fmt.Sprint(rankdir),
-		// },
 	}
 
 	var buf bytes.Buffer
